@@ -44,6 +44,7 @@ ISSUES / TO IMPROVE:
 		2. Creating A DB:
 			a. tags DB -> with relations
 			b. articles DB - commit articles to DB (https://techcrunch.com/sitemap-index-1.xml)
+			c. use / explore public data-sets
 		ALG IMPROVEMENTS
 		recall:
 		1. General Topics / Deduced Topics:
