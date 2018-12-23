@@ -1,6 +1,6 @@
 import pandas
 
-from home_assigmetns import textProcessing
+from home_assigmetns import textProcessing, ValidationPredictors
 
 
 ## moudle allows operation in candidates and their respective predictors , such as merge,remove, scoring and etc'....
@@ -21,57 +21,53 @@ def mergeKeywordsFromSeveralSourcesByStemming(alg_to_candidates_and_candiates_pr
     merged_candidate_to_alg_to_predictors = {merged_candidate:stemmed_candidate_to_alg_to_predictors[textProcessing.stemming(merged_candidate)] for merged_candidate in merged_candidates}
     return merged_candidates,merged_candidate_to_alg_to_predictors
 
-def removeKeywords(candidates,candidates_predictors,general_stemmed_keywords_arg=None):
-    if not general_stemmed_keywords_arg:
-        general_stemmed_keywords_arg = "tech_crunch_general"
-    general_keywords = _getGeneralKeywords(general_stemmed_keywords_arg)
+
+APPROVE_FUNCTIONS_AND_NAME = [
+    (ValidationPredictors.approveByRakePredictors,"content_rake"),
+    (ValidationPredictors.approveByTitlePredictors,"title_nc")
+    ]
+
+REMOVE_FUNCTIONS_AND_NAME =[
+    (ValidationPredictors.removeByRakePredictors,"content_rake")
+    ]
+
+def removeKeywords(candidates,candidates_predictors,remove_functions_and_name=REMOVE_FUNCTIONS_AND_NAME,approve_functions_and_names = APPROVE_FUNCTIONS_AND_NAME,general_stemmed_keywords_arg=None):
     approved_candidates = set()
+    wiki_approvals = 0
+    candidates = sorted(list(candidates),key=lambda x: len(x),reverse = True) ## check wiki first for longer phrases - rake style 
+    stemmed_candidates = [textProcessing.stemming(candidate) for candidate in candidates]
     for candidate in candidates:
         candidate_predictors = candidates_predictors[candidate]
-        processed = False
-        ### ignore general keywords
-        if not processed and textProcessing.stemming(candidate) in general_keywords :
-            processed = True
-        ### with wiki-page candidates
-        if not processed and candidate_predictors["global"]["wiki_page"]:
-            approved_candidates.add(candidate)
-        ### both rake and title found that keyword relevant:
-        if not processed and candidate_predictors.get("title_nc") and candidate_predictors.get("content_rake"):
-            approved_candidates.add(candidate)
-            processed = True
-        if not processed and candidate_predictors.get("title_nc"):
-            title_predictors = candidate_predictors["title_nc"]
-            if _approveByTitlePredictors(title_predictors):
+        processed = _removeCandidate(candidate,candidate_predictors,remove_functions_and_name,general_stemmed_keywords_arg) 
+        if not processed: ## if removed no point in validation
+            processed, wiki_approvals = _approveCandidate(candidate, candidate_predictors, approve_functions_and_names,wiki_approvals,stemmed_candidates)
+            if processed:
                 approved_candidates.add(candidate)
-                processed = True
-        if not processed and candidate_predictors.get("content_rake"):
-            rake_predictors = candidate_predictors["content_rake"]
-            if _approveByRakePredictors(rake_predictors):
-                approved_candidates.add(candidate)
-                processed = True
     return approved_candidates
-        
-def _approveByTitlePredictors(title_predictors):
-    if title_predictors.get("entity_label"):
-        return True
-    return False
 
-APPROVED_POS_SET = set([u'NOUN',u'PROPN',u'ADJ'])
-
-def _approveByRakePredictors(rake_predictors):
-    pos_in_phrase = set([pos_list[0] for pos_list in rake_predictors["pos_tagging"]]) ## not very reptitve so its fine to take the first element
-    if pos_in_phrase.intersection(APPROVED_POS_SET):
-        if rake_predictors["rake_score"]/(1.0*rake_predictors["phrase_length"])>2.0:
-            return True
-    return False
-
-GENERAL_WORDS = ["company","years","months","days","employees","techcrunch","pepole"]
-
-def _getGeneralKeywords(general_stemmed_keywords_arg):
-    """ create implementation of getting general words, e.g from DB by some tf-idf and argument,
-    currently implemented in naive way"""
-    return [textProcessing.stemming(word) for word in GENERAL_WORDS]
-
+def _removeCandidate(candidate,candidate_predictors,remove_functions_and_name,general_stemmed_keywords_arg):
+    removed = False
+    removed = ValidationPredictors.removeGeneralWords(candidate, general_stemmed_keywords_arg)
+    if removed:
+        return removed
+    for func,arg_name in remove_functions_and_name:
+        if candidate_predictors.get(arg_name):
+            removed = func(candidate,candidate_predictors[arg_name])
+        if removed:
+            return removed
+    return removed
+                    
+def _approveCandidate(candidate,candidate_predictors,approve_functions_and_names,wiki_approvals,stemmed_candidates):
+    approved = False
+    for func,arg_name in approve_functions_and_names:
+        if not approved and candidate_predictors.get(arg_name):
+            approved = func(candidate,candidate_predictors[arg_name])
+    if not approved and wiki_approvals<4: ## up to 4 wiki_approvals to run in a reasonable time
+        wiki_title = ValidationPredictors.getWikiTitle(candidate)
+        if textProcessing.stemming(wiki_title) not in stemmed_candidates and wiki_title:
+            approved = True
+        wiki_approvals +=1
+    return approved,wiki_approvals
 
 def getCandidatePredictorsAsDF(candidates_predictors,article_id=None):
     """ candidates_predictors is shaped as {candidate : {alg : {"predictor":dat}}}"""
@@ -82,8 +78,10 @@ def getCandidatePredictorsAsDF(candidates_predictors,article_id=None):
     vals = []
     for candidate in candidates:
         alg_to_predictors_dict = candidates_predictors[candidate]
+        vals_dict = {}
         for alg,predictors_dict in alg_to_predictors_dict.iteritems():
-            vals.append({(alg+"_"+k):v for k,v in predictors_dict.iteritems()})
+            vals_dict.update({(alg+"_"+pred):pred_val for pred,pred_val in predictors_dict.iteritems()})
+        vals.append(vals_dict)
     return pandas.DataFrame(vals,index=multi_index)
     
 
